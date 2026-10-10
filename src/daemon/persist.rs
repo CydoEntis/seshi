@@ -57,6 +57,9 @@ pub struct SavedPane {
     pub name: String,
     #[serde(default)]
     pub model: String,
+    /// The name you gave it (rename), which wins over everything else.
+    #[serde(default)]
+    pub label: String,
 }
 
 pub fn path() -> PathBuf {

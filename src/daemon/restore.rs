@@ -63,6 +63,7 @@ impl Daemon {
             unseen: term.status == Status::Done,
             name: if term.name.is_empty() { term.first_prompt.clone() } else { term.name.clone() },
             model: term.model.clone(),
+            label: term.label.clone(),
         };
         let workspaces = self
             .workspaces
@@ -136,6 +137,7 @@ impl Daemon {
                                 t.restore_unseen = pane.unseen;
                                 t.first_prompt = pane.name.clone();
                                 t.model = pane.model.clone();
+                                t.label = pane.label.clone();
                             }
                             map.insert(old, new);
                             restored += 1;

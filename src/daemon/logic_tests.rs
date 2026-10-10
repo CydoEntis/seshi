@@ -174,7 +174,7 @@ fn restore_gives_panes_new_ids_and_keeps_their_layout() {
     let mut layout = Node::Leaf(70);
     layout.split(70, crate::layout::Dir::Right, 71);
     let mut panes = std::collections::BTreeMap::new();
-    panes.insert(70, persist::SavedPane { cwd: Some(dir.clone()), name: "left one".into(), ..Default::default() });
+    panes.insert(70, persist::SavedPane { cwd: Some(dir.clone()), name: "left one".into(), label: "Map Gen".into(), ..Default::default() });
     panes.insert(71, persist::SavedPane { cwd: Some(dir.clone()), model: "opus".into(), ..Default::default() });
     let saved = persist::Saved {
         workspaces: vec![persist::SavedWs {
@@ -198,6 +198,8 @@ fn restore_gives_panes_new_ids_and_keeps_their_layout() {
     let (left, right) = (leaves[0], leaves[1]);
     assert_eq!(tab.focus, right, "focus follows the pane it was on");
     assert_eq!(d.terms[&left].first_prompt, "left one");
+    assert_eq!(d.terms[&left].label, "Map Gen", "the name you gave it comes back");
+    assert_eq!(d.saved().workspaces[0].tabs[0].panes[&left].label, "Map Gen", "and is saved again");
     assert_eq!(d.terms[&right].model, "opus");
     close(&mut d, &leaves);
 }
