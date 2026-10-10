@@ -2,10 +2,19 @@
 
 use super::*;
 
+/// One line this long, arriving in a single burst, was pasted: nobody types it that fast.
+const PASTE_MIN_CHARS: usize = 16;
+
+/// How many keys went down in `events`.
+pub(super) fn presses(events: &[Event]) -> usize {
+    events.iter().filter(|ev| matches!(ev, Event::Key(k) if k.kind != KeyEventKind::Release)).count()
+}
+
 /// A burst of keys read at once that is really a paste: plain text with a line break inside
-/// it (Enter followed by more text). Windows hands a terminal paste over this way, each new
-/// line an Enter; sent as keys, the first one would send the message. Typing ahead that
-/// ends in Enter isn't a paste, and stays keys.
+/// it (Enter followed by more text), or one long line. Windows hands a terminal paste over
+/// this way, each new line an Enter; sent as keys, the first one would send the message and
+/// the rest would crawl in a letter at a time. Typing ahead that ends in Enter isn't a
+/// paste, and stays keys.
 pub(super) fn paste_from_burst(events: &[Event]) -> Option<String> {
     let mut text = String::new();
     let mut broken_line = false;
@@ -27,7 +36,8 @@ pub(super) fn paste_from_burst(events: &[Event]) -> Option<String> {
             _ => return None,
         }
     }
-    broken_line.then_some(text)
+    let long_line = text.chars().count() >= PASTE_MIN_CHARS && !text.ends_with('\n');
+    (broken_line || long_line).then_some(text)
 }
 
 impl App {
@@ -921,7 +931,10 @@ mod tests {
         assert_eq!(paste_from_burst(&keys("first\nsecond")).as_deref(), Some("first\nsecond"));
         assert_eq!(paste_from_burst(&keys("one\ntwo\n")).as_deref(), Some("one\ntwo\n"), "a trailing line break stays in the paste");
         assert_eq!(paste_from_burst(&keys("yes\n")), None, "typed ahead and sent: still keys");
-        assert_eq!(paste_from_burst(&keys("abc")), None, "one line: keys do the same");
+        assert_eq!(paste_from_burst(&keys("abc")), None, "a few letters: keys do the same");
+        assert_eq!(paste_from_burst(&keys("https://example.com/a/long/link")).as_deref(), Some("https://example.com/a/long/link"), "one long line at once: pasted whole");
+        assert_eq!(paste_from_burst(&keys("cargo test --workspace\n")), None, "a long line typed ahead and sent: still keys");
+        assert_eq!(super::presses(&keys("ab")), 2, "releases don't count");
         let mut with_ctrl = keys("a\nb");
         with_ctrl.push(Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
         assert_eq!(paste_from_burst(&with_ctrl), None, "a shortcut in it: keys");

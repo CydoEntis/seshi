@@ -45,6 +45,10 @@ const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
 const TICK: Duration = Duration::from_millis(50);
 /// The shortest time between two frames (about 80 a second at most).
 const MIN_FRAME: Duration = Duration::from_millis(12);
+/// Keys of one paste come this close together (Windows); typing never does.
+const PASTE_GAP: Duration = Duration::from_millis(8);
+/// The longest a paste is waited on before what has come is handed over.
+const PASTE_MAX_WAIT: Duration = Duration::from_secs(1);
 /// How long a note stays in the bottom bar.
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 /// Two clicks this close together are a double-click.
@@ -556,10 +560,24 @@ impl App {
                         while let Some(Some(next)) = events.next().now_or_never() {
                             burst.push(next?);
                         }
-                        match input::paste_from_burst(&burst) {
+                        // Two keys down at once is a paste starting, and the console hands the
+                        // rest over in pieces: wait them out, or each piece is typed on its own.
+                        if input::presses(&burst) >= 2 {
+                            let started = Instant::now();
+                            while started.elapsed() < PASTE_MAX_WAIT {
+                                match tokio::time::timeout(PASTE_GAP, events.next()).await {
+                                    Ok(Some(next)) => burst.push(next?),
+                                    _ => break,
+                                }
+                            }
+                        }
+                        // The mouse moving during a paste isn't part of it.
+                        let (keys, rest): (Vec<Event>, Vec<Event>) = burst.iter().cloned().partition(|ev| matches!(ev, Event::Key(_)));
+                        match input::paste_from_burst(&keys) {
                             Some(text) => {
                                 self.dirty = true;
                                 self.on_paste(text);
+                                rest.into_iter().for_each(|ev| self.on_event(ev));
                             }
                             None => burst.into_iter().for_each(|ev| self.on_event(ev)),
                         }
