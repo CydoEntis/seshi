@@ -66,6 +66,9 @@ included). Inspired by [herdr](https://github.com/ogulcancelik/herdr),
 - **Detection without setup.** The process tree finds `claude`, `codex`, `gemini`, `opencode`,
   `cursor-agent`, `copilot`, `amp`, `qwen`, `aider` and others, and screen patterns tell
   working from blocked. Hooks (`seshi integrate claude`) make it exact.
+- **Subagents under their agent.** What an agent has running shows under its row
+  (`↳ reconcile_audit`, repeats counted): Claude's from its hooks, Codex's from its session
+  files (each subagent by its task's name, and `goal` while `/goal` is driving it).
 - **Git without leaving.** New agents get their own worktree, including `claude` or `codex`
   typed into a shell in a repo's main folder (turn it off with *Own worktree per agent* in
   Settings; `--continue`/`--resume` stay put). Changes (`d`) shows the diff with

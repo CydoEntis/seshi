@@ -69,7 +69,8 @@ pub enum Ev {
     },
     WorktreeRemoved { client: ClientId, path: PathBuf, result: Result<(), String> },
     /// Numbers read from Codex's session files (`usage::poll_codex`).
-    CodexUsage { usage: Vec<(TermId, Usage)>, limits: Option<Vec<Limit>> },
+    /// What Codex's session files say: usage, limits, and what runs under each pane's session.
+    CodexUsage { usage: Vec<(TermId, Usage)>, limits: Option<Vec<Limit>>, subagents: Vec<(TermId, Vec<(String, String)>)> },
     /// A worktree made for an agent started from a shell (`Command::AgentWorktree`).
     AgentWorktreeMade { client: ClientId, result: Result<PathBuf, String> },
     /// A worktree removed (or kept) after its last pane closed.
@@ -817,7 +818,7 @@ impl Daemon {
                 self.send(client, ServerMsg::Notice(msg));
                 self.dirty = true;
             }
-            Ev::CodexUsage { usage, limits } => self.codex_usage(usage, limits),
+            Ev::CodexUsage { usage, limits, subagents } => self.codex_usage(usage, limits, subagents),
             Ev::WorktreeRemoved { client, path, result } => {
                 self.pending_ops -= 1;
                 match result {

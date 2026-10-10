@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 /// How often Codex's session files are read.
-const CODEX_EVERY: Duration = Duration::from_secs(30);
+const CODEX_EVERY: Duration = Duration::from_secs(5);
 /// How much of the end of a Codex session file is read for its latest numbers.
 const CODEX_TAIL: u64 = 512 * 1024;
 /// A limit with no known reset time: try again after this long (seconds).
@@ -88,23 +88,36 @@ impl Daemon {
         self.last_codex = Instant::now();
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let files = codex_recent_sessions();
+            let sessions = codex_recent_sessions();
             let mut usage = Vec::new();
             let mut limits = None;
+            let mut subagents = Vec::new();
             for (term, dir) in panes {
-                let Some(file) = files.iter().find(|(_, cwd)| cwd.as_deref().is_some_and(|c| same_path(c, &dir))).map(|(f, _)| f) else { continue };
-                let (u, l) = codex_facts(&read_tail(file, CODEX_TAIL));
+                // The session you talk to, not one of its subagents (they run in the same folder).
+                let Some(root) = sessions.iter().find(|s| s.parent.is_none() && s.cwd.as_deref().is_some_and(|c| same_path(c, &dir))) else { continue };
+                let tail = read_tail(&root.file, CODEX_TAIL);
+                let (u, l) = codex_facts(&tail);
                 if let Some(u) = u {
                     usage.push((term, u));
                 }
                 limits = limits.or(l);
+                subagents.push((term, codex_helpers(root, &tail, &sessions)));
             }
-            let _ = tx.blocking_send(Ev::CodexUsage { usage, limits });
+            let _ = tx.blocking_send(Ev::CodexUsage { usage, limits, subagents });
         });
     }
 
-    pub(super) fn codex_usage(&mut self, usage: Vec<(TermId, Usage)>, limits: Option<Vec<Limit>>) {
+    pub(super) fn codex_usage(&mut self, usage: Vec<(TermId, Usage)>, limits: Option<Vec<Limit>>, subagents: Vec<(TermId, Vec<(String, String)>)>) {
         self.codex_busy = false;
+        // Codex has no hooks for its subagents: they're read off its session files instead.
+        for (term, subs) in subagents {
+            if let Some(t) = self.terms.get_mut(&term)
+                && t.subagents != subs
+            {
+                t.subagents = subs;
+                self.dirty = true;
+            }
+        }
         for (term, u) in usage {
             if let Some(t) = self.terms.get_mut(&term)
                 && t.usage != u
@@ -164,9 +177,89 @@ fn codex_sessions() -> Option<PathBuf> {
     Some(home.join("sessions"))
 }
 
-/// The session files of Codex's last two days with sessions (`YYYY/MM/DD/rollout-….jsonl`),
-/// newest first, each with the folder it ran in.
-fn codex_recent_sessions() -> Vec<(PathBuf, Option<PathBuf>)> {
+/// A Codex session file: who it is and where it ran, from its first line.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CodexSession {
+    pub file: PathBuf,
+    pub cwd: Option<PathBuf>,
+    pub id: String,
+    /// The session that spawned it (a subagent's).
+    pub parent: Option<String>,
+    /// A subagent's task name (the end of its agent path), else its nickname.
+    pub name: String,
+    pub modified: std::time::SystemTime,
+}
+
+/// A subagent whose file hasn't been written to for this long has stopped without saying so.
+const CODEX_SUBAGENT_STALE: Duration = Duration::from_secs(20 * 60);
+
+/// What runs under a Codex session right now, as (id, name): its subagents (and theirs) whose
+/// task is still going, and `goal` while a goal is what started its current turn.
+pub(super) fn codex_helpers(root: &CodexSession, root_tail: &str, all: &[CodexSession]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if codex_running(root_tail) == Some(true) && codex_goal_turn(root_tail) {
+        out.push(("goal".to_string(), "goal".to_string()));
+    }
+    let mut parents = vec![root.id.clone()];
+    while let Some(parent) = parents.pop() {
+        for s in all.iter().filter(|s| s.parent.as_deref() == Some(parent.as_str())) {
+            parents.push(s.id.clone());
+            let fresh = s.modified.elapsed().is_ok_and(|e| e < CODEX_SUBAGENT_STALE);
+            // No task line in the part read: a long task still writing counts as running.
+            if fresh && codex_running(&read_tail(&s.file, CODEX_TAIL)).unwrap_or(true) {
+                out.push((s.id.clone(), s.name.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Whether the last task in a session file's tail is still going (None: no task line there).
+pub(super) fn codex_running(tail: &str) -> Option<bool> {
+    tail.lines().rev().find_map(|l| {
+        if l.contains("\"type\":\"task_started\"") {
+            Some(true)
+        } else if l.contains("\"type\":\"task_complete\"") || l.contains("\"type\":\"turn_aborted\"") {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+/// Whether the last task started in the tail was started by a goal (`/goal`).
+pub(super) fn codex_goal_turn(tail: &str) -> bool {
+    tail.lines().rev().find(|l| l.contains("\"type\":\"task_started\"")).is_some_and(|l| l.contains("\"turn_trigger\":\"goal\""))
+}
+
+/// A session's id, parent, folder and name from the start of its first line.
+pub(super) fn codex_meta(head: &str) -> Option<(String, Option<String>, Option<PathBuf>, String)> {
+    static FIELD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""(id|parent_thread_id|cwd|agent_path|agent_nickname|thread_source)":("(?:[^"\\]|\\.)*")"#).unwrap());
+    let mut get = std::collections::HashMap::new();
+    for c in FIELD.captures_iter(head) {
+        // The first of each: the session's own, ahead of anything nested later in the line.
+        get.entry(c[1].to_string()).or_insert_with(|| serde_json::from_str::<String>(&c[2]).unwrap_or_default());
+    }
+    let id = get.get("id").cloned().filter(|s| !s.is_empty())?;
+    let sub = get.get("thread_source").is_some_and(|s| s == "subagent");
+    let parent = get.get("parent_thread_id").cloned().filter(|p| sub && !p.is_empty());
+    let name = get
+        .get("agent_path")
+        .and_then(|p| p.rsplit('/').next().map(str::to_string))
+        .filter(|n| !n.is_empty())
+        .or_else(|| get.get("agent_nickname").cloned())
+        .unwrap_or_else(|| "subagent".into());
+    Some((id, parent, get.get("cwd").map(PathBuf::from), name))
+}
+
+/// How many of Codex's days with sessions are looked through: a session lives in the folder
+/// of the day it started, and one can run for days.
+const CODEX_DAYS: usize = 7;
+
+/// The session files of Codex's last `CODEX_DAYS` days with sessions
+/// (`YYYY/MM/DD/rollout-….jsonl`), newest first, each with who it is and the folder it ran in.
+/// Who a file is never changes, so it's read once and remembered.
+fn codex_recent_sessions() -> Vec<CodexSession> {
     let Some(root) = codex_sessions() else { return Vec::new() };
     let sorted = |dir: &Path| -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = std::fs::read_dir(dir).map(|r| r.flatten().map(|e| e.path()).collect()).unwrap_or_default();
@@ -174,7 +267,7 @@ fn codex_recent_sessions() -> Vec<(PathBuf, Option<PathBuf>)> {
         v.reverse();
         v
     };
-    let days: Vec<PathBuf> = sorted(&root).iter().flat_map(|y| sorted(y)).flat_map(|m| sorted(&m)).take(2).collect();
+    let days: Vec<PathBuf> = sorted(&root).iter().flat_map(|y| sorted(y)).flat_map(|m| sorted(&m)).take(CODEX_DAYS).collect();
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = days
         .iter()
         .flat_map(|d| sorted(d))
@@ -182,21 +275,27 @@ fn codex_recent_sessions() -> Vec<(PathBuf, Option<PathBuf>)> {
         .filter_map(|f| Some((f.metadata().ok()?.modified().ok()?, f)))
         .collect();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    files.into_iter().map(|(_, f)| {
-        let cwd = codex_session_cwd(&f);
-        (f, cwd)
-    }).collect()
+    files
+        .into_iter()
+        .filter_map(|(modified, file)| {
+            type Meta = Option<(String, Option<String>, Option<PathBuf>, String)>;
+            static SEEN: LazyLock<std::sync::Mutex<std::collections::HashMap<PathBuf, Meta>>> = LazyLock::new(Default::default);
+            let meta = SEEN.lock().ok()?.entry(file.clone()).or_insert_with(|| codex_meta(&read_head(&file, CODEX_HEAD))).clone();
+            let (id, parent, cwd, name) = meta?;
+            Some(CodexSession { file, cwd, id, parent, name, modified })
+        })
+        .collect()
 }
 
-/// The folder a Codex session ran in, from its first line.
-fn codex_session_cwd(file: &Path) -> Option<PathBuf> {
+/// How much of the start of a session file holds who it is (its first line's first fields).
+const CODEX_HEAD: usize = 16 * 1024;
+
+/// The first `n` bytes of a file, as text.
+fn read_head(file: &Path, n: usize) -> String {
     use std::io::Read;
-    static CWD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""cwd":("(?:[^"\\]|\\.)*")"#).unwrap());
-    let mut head = vec![0; 16 * 1024];
-    let n = std::fs::File::open(file).ok()?.read(&mut head).ok()?;
-    let text = String::from_utf8_lossy(&head[..n]);
-    let quoted = CWD.captures(&text)?.get(1)?.as_str().to_string();
-    serde_json::from_str::<String>(&quoted).ok().map(PathBuf::from)
+    let mut head = vec![0; n];
+    let read = std::fs::File::open(file).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+    String::from_utf8_lossy(&head[..read]).into_owned()
 }
 
 /// The last `n` bytes of a file, as text.
@@ -292,6 +391,57 @@ mod tests {
         assert!((day[0].cost - 1.25).abs() < 1e-9);
         assert_eq!((day[1].agent.as_str(), day[1].turns), ("codex", 1));
         assert_eq!((day[2].agent.as_str(), day[2].turns, day[2].working_secs), ("gemini", 0, 0), "cost without a turn still counts");
+    }
+
+    #[test]
+    fn codex_sessions_say_who_they_are() {
+        let root = r#"{"timestamp":"t","ordinal":0,"type":"session_meta","payload":{"creator_user_id":"u","session_id":"aaa","id":"aaa","timestamp":"t","cwd":"C:\\dev\\game","originator":"codex-tui","source":"vscode","thread_source":"user"}}"#;
+        assert_eq!(codex_meta(root), Some(("aaa".into(), None, Some(PathBuf::from(r"C:\dev\game")), "subagent".into())));
+        let sub = r#"{"type":"session_meta","payload":{"session_id":"aaa","id":"bbb","forked_from_id":"aaa","parent_thread_id":"aaa","cwd":"C:\\dev\\game","source":{"subagent":{"thread_spawn":{"parent_thread_id":"aaa","depth":1,"agent_path":"/root/reconcile_audit","agent_nickname":"Kuhn"}}},"thread_source":"subagent","agent_nickname":"Kuhn"}}"#;
+        let (id, parent, _, name) = codex_meta(sub).unwrap();
+        assert_eq!((id.as_str(), parent.as_deref(), name.as_str()), ("bbb", Some("aaa"), "reconcile_audit"), "a subagent: its own id, its parent, its task's name");
+        assert_eq!(codex_meta("not a session"), None);
+    }
+
+    #[test]
+    fn codex_subagents_and_goals_are_read_off_its_files() {
+        let started = r#"{"type":"event_msg","payload":{"type":"task_started","turn_attribution":{"turn_trigger":"user"}}}"#;
+        let by_goal = r#"{"type":"event_msg","payload":{"type":"task_started","turn_attribution":{"turn_trigger":"goal"}}}"#;
+        let done = r#"{"type":"event_msg","payload":{"type":"task_complete","turn_id":"x"}}"#;
+        assert_eq!(codex_running(&format!("{started}\n{done}")), Some(false));
+        assert_eq!(codex_running(&format!("{done}\n{started}\n{{\"type\":\"response_item\"}}")), Some(true));
+        assert_eq!(codex_running("{\"type\":\"response_item\"}"), None, "no task line in what was read");
+        assert!(codex_goal_turn(&format!("{started}\n{done}\n{by_goal}")) && !codex_goal_turn(&format!("{by_goal}\n{done}\n{started}")), "the last turn's trigger");
+        // On disk: a root working toward a goal, one subagent still going, one finished.
+        let dir = std::env::temp_dir().join(format!("seshi-codex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, body: &str| {
+            let f = dir.join(name);
+            std::fs::write(&f, body).unwrap();
+            f
+        };
+        let session = |f: PathBuf, id: &str, parent: Option<&str>, name: &str| CodexSession { file: f, cwd: None, id: id.into(), parent: parent.map(String::from), name: name.into(), modified: std::time::SystemTime::now() };
+        let root = session(file("root.jsonl", by_goal), "aaa", None, "subagent");
+        let all = vec![root.clone(), session(file("a.jsonl", started), "bbb", Some("aaa"), "reconcile_audit"), session(file("b.jsonl", &format!("{started}\n{done}")), "ccc", Some("aaa"), "docs_pass"), session(file("c.jsonl", started), "ddd", Some("bbb"), "nested_check")];
+        let helpers = codex_helpers(&root, by_goal, &all);
+        let names: Vec<&str> = helpers.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names, vec!["goal", "reconcile_audit", "nested_check"], "the goal, the running subagent and its own; not the finished one");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Against the Codex sessions on this machine: `cargo test codex_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn codex_live() {
+        let all = codex_recent_sessions();
+        let roots: Vec<&CodexSession> = all.iter().filter(|s| s.parent.is_none()).collect();
+        println!("{} recent sessions, {} of them yours, {} subagents", all.len(), roots.len(), all.len() - roots.len());
+        for r in roots.iter().take(5) {
+            let helpers = codex_helpers(r, &read_tail(&r.file, CODEX_TAIL), &all);
+            let under = all.iter().filter(|s| s.parent.as_deref() == Some(r.id.as_str())).count();
+            println!("  {}: {} subagents ever, running now: {:?}", r.cwd.as_ref().and_then(|c| c.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), under, helpers.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>());
+        }
     }
 
     #[test]
