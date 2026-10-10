@@ -1315,6 +1315,19 @@ mod hydra_tests {
     }
 
     #[test]
+    fn a_sleeping_agent_shows_three_zs() {
+        let (_, mut app) = super::design_tests::render_with(160, 45);
+        let agent = *app.snap.terms.iter().find(|(_, t)| t.agent.is_some()).unwrap().0;
+        app.snap.terms.get_mut(&agent).unwrap().asleep = true;
+        app.hy_fresh();
+        let o = draw(&mut app, 160, 45);
+        show(&o);
+        let row = o.lines().find(|l| l.contains("asleep")).expect("the sleeping agent's row");
+        assert!(row.contains("zzZ "), "three z's ahead of its name: {row}");
+        assert!(!o.contains('☾'), "the moon is gone");
+    }
+
+    #[test]
     fn the_sidebar_has_a_section_per_kind_of_session() {
         let (_, mut app) = super::design_tests::render_with(160, 45);
         // The shell ssh's into a machine; a second shell sits in another folder.

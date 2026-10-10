@@ -359,9 +359,7 @@ pub(in crate::client) fn draw_side(app: &mut App, buf: &mut Buffer, r: Rect, mod
                 }
                 let sel = focused_side && app.hy.cursor == Some(s.term);
                 let st = Style::default().bg(bg);
-                let (gl, gc) = if s.asleep {
-                    ("☾".to_string(), t.muted)
-                } else if s.is_agent || s.status != Status::None {
+                let (gl, gc) = if s.is_agent || s.status != Status::None {
                     (glyph(app, s.status), state_color(t, s.status))
                 } else {
                     ("›".to_string(), t.muted)
@@ -435,7 +433,14 @@ pub(in crate::client) fn draw_side(app: &mut App, buf: &mut Buffer, r: Rect, mod
                 // Pointed at: its ⋯ takes the row's last column, the right side steps in.
                 let menu = hovered(app, row) && !sel;
                 let end = if menu { right.saturating_sub(2) } else { right };
-                put(buf, x0 + 5, y, &[seg(gl, gs)], name_x);
+                if s.asleep {
+                    // Snoring, the way a comic draws it: z's growing as they rise. They hang
+                    // left of the icon column so the name stays in line with the others.
+                    let zs: Vec<Seg> = SLEEP_ZS.iter().map(|(z, f)| seg(*z, st.fg(blend(bg, t.text, *f)).add_modifier(Modifier::BOLD))).collect();
+                    put(buf, x0 + 3, y, &zs, name_x);
+                } else {
+                    put(buf, x0 + 5, y, &[seg(gl, gs)], name_x);
+                }
                 put(buf, name_x, y, &left, end.saturating_sub(tw + 1));
                 put(buf, end.saturating_sub(tw), y, &tail, end);
                 hit(app, row, HyHit::Session(s.term));
@@ -656,6 +661,9 @@ pub(in crate::client) fn draw_main(app: &mut App, f: &mut Frame, area: Rect, mod
 pub(in crate::client) fn row_menu_button(app: &mut App, buf: &mut Buffer, r: Rect, bg: Color, t: &Theme, h: HyHit) {
     row_glyph(app, buf, r, "⋯", bg, t.muted, t, h);
 }
+
+/// A sleeping row's three z's and how strongly each shows: small and faint to big and clear.
+const SLEEP_ZS: [(&str, f32); 3] = [("z", 0.5), ("z", 0.75), ("Z", 1.0)];
 
 /// A small glyph button on a sidebar row (⋯, +): just the glyph on the row's own ground,
 /// brightening when it's the one under the mouse.
@@ -930,7 +938,7 @@ pub(in crate::client) fn draw_session(app: &mut App, f: &mut Frame, r: Rect, ter
     if info.asleep {
         dim_all(f.buffer_mut(), inner, t);
         let note = vec![
-            seg(" ☾ asleep to save memory · ", Style::default().bg(t.card2).fg(t.text)),
+            seg(" zzZ asleep to save memory · ", Style::default().bg(t.card2).fg(t.text)),
             seg("click or press any key", Style::default().bg(t.card2).fg(t.accent).add_modifier(Modifier::BOLD)),
             seg(" to wake it where it left off ", Style::default().bg(t.card2).fg(t.text)),
         ];

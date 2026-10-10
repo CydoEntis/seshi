@@ -155,7 +155,7 @@ split beside a session stays with it.
 - Under it, its sessions: state, name, `branch · age` on the right. A session that needs you has
   its question under it. Every new claude / codex gets its own worktree (named for you), so agents
   never edit the same files.
-- Things that need you sort to the top. Agents asleep (see Settings) show `☾ asleep`.
+- Things that need you sort to the top. Agents asleep (see Settings) show `zzZ … asleep`.
 - Drag a group's name, or a session, up or down to reorder (what needs you still comes first);
   drop a session on another group (its name or one of its sessions) to move it there, within its
   section. Click to fold or open. With the sidebar focused
