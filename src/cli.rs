@@ -612,9 +612,14 @@ pub fn doctor() -> Result<()> {
                 format!("{} missing ({first}{}); `seshi integrate claude` fixes seshi's own, remove the rest", broken.len(), if broken.len() > 1 { ", …" } else { "" }),
             ),
         }
-        let home = directories::BaseDirs::new().map(|d| d.home_dir().join(".claude.json"));
-        let mcp = home.and_then(|p| std::fs::read_to_string(p).ok()).is_some_and(|s| s.contains("\"seshi\"") && s.contains("\"mcp\""));
-        line(if mcp { Some(true) } else { None }, "seshi MCP for claude", if mcp { "registered".into() } else { "not set up: `seshi integrate mcp` lets agents see each other (optional)".into() });
+        let claude_json = std::fs::read_to_string(claude_json()).unwrap_or_default();
+        let mcp = claude_json.contains("\"seshi\"") && claude_json.contains("\"mcp\"");
+        let old = serde_json::from_str::<Value>(&claude_json).map(|root| old_mcp_names(&root)).unwrap_or_default();
+        match old.first() {
+            // Claude names the server in every call it shows ("Called hydra"), and may run an old program.
+            Some(name) => line(Some(false), "seshi MCP for claude", format!("still registered as `{name}`: `seshi integrate mcp` renames it")),
+            None => line(if mcp { Some(true) } else { None }, "seshi MCP for claude", if mcp { "registered".into() } else { "not set up: `seshi integrate mcp` lets agents see each other (optional)".into() }),
+        }
     }
 
     // Terminal
@@ -1038,6 +1043,32 @@ fn broken_hooks_in(root: &Value, exists: impl Fn(&std::path::Path) -> bool, on_p
     out
 }
 
+/// Where Claude Code keeps its MCP servers (yours, for every project).
+fn claude_json() -> PathBuf {
+    directories::BaseDirs::new().map(|d| d.home_dir().join(".claude.json")).unwrap_or_default()
+}
+
+/// The MCP servers in Claude's `root` that are this app under an old name: Claude shows the
+/// name on every call, and the program behind it is an install that no longer updates.
+fn old_mcp_names(root: &Value) -> Vec<String> {
+    let Some(servers) = root.get("mcpServers").and_then(Value::as_object) else { return Vec::new() };
+    servers
+        .iter()
+        .filter(|(_, server)| {
+            let prog = server.get("command").and_then(Value::as_str).unwrap_or_default();
+            let stem = std::path::Path::new(prog).file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            let serves = server.get("args").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some("mcp")));
+            matches!(stem.as_str(), "hydra" | "drover") && serves
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Runs Claude Code's own CLI (a `.cmd` shim on Windows).
+fn run_claude(args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new(if cfg!(windows) { "claude.cmd" } else { "claude" }).args(args).status().or_else(|_| std::process::Command::new("claude").args(args).status())
+}
+
 /// The Claude settings files whose hooks run here: yours, and this folder's project ones.
 fn claude_settings_files() -> Vec<PathBuf> {
     let user = claude_settings();
@@ -1357,12 +1388,14 @@ pub fn integrate(agent: &str, uninstall: bool) -> Result<()> {
         }
         "mcp" => {
             // Claude Code: register for every project (user scope).
-            let args = ["mcp", "add", "--scope", "user", "seshi", "--", exe.as_str(), "mcp"];
-            let added = std::process::Command::new(if cfg!(windows) { "claude.cmd" } else { "claude" })
-                .args(args)
-                .status()
-                .or_else(|_| std::process::Command::new("claude").args(args).status());
-            match added {
+            let old = std::fs::read_to_string(claude_json()).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).map(|root| old_mcp_names(&root)).unwrap_or_default();
+            for name in old {
+                match run_claude(&["mcp", "remove", "--scope", "user", &name]) {
+                    Ok(s) if s.success() => println!("removed the old `{name}` MCP server from Claude Code"),
+                    _ => println!("Claude Code: run  claude mcp remove --scope user {name}"),
+                }
+            }
+            match run_claude(&["mcp", "add", "--scope", "user", "seshi", "--", exe.as_str(), "mcp"]) {
                 Ok(s) if s.success() => println!("added the seshi MCP server to Claude Code (all projects)"),
                 _ => println!("Claude Code: run  claude mcp add --scope user seshi -- \"{exe}\" mcp"),
             }
@@ -1554,6 +1587,17 @@ mod tests {
         assert!(std::fs::read_to_string(&file).unwrap().contains("my-notifier"));
         let _ = std::fs::remove_file(&file);
         let _ = std::fs::remove_file(file.with_extension("toml.seshi-bak"));
+    }
+
+    #[test]
+    fn an_mcp_server_left_under_an_old_name_is_found() {
+        let root = serde_json::json!({ "mcpServers": {
+            "hydra": { "command": "C:/Programs/hydra/hydra.exe", "args": ["mcp"] },
+            "seshi": { "command": "C:/Programs/seshi/seshi.exe", "args": ["mcp"] },
+            "plane": { "command": "npx", "args": ["plane-mcp"] },
+        }});
+        assert_eq!(super::old_mcp_names(&root), vec!["hydra".to_string()], "only the old install's");
+        assert!(super::old_mcp_names(&serde_json::json!({})).is_empty(), "no servers at all");
     }
 
     #[test]
