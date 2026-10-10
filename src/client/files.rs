@@ -163,17 +163,71 @@ fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
 #[cfg(windows)]
 fn shell_open(target: &std::ffi::OsStr) -> std::io::Result<()> {
     use std::ffi::c_void;
+    #[repr(C)]
+    struct ShellExecuteInfo {
+        size: u32,
+        mask: u32,
+        hwnd: *mut c_void,
+        verb: *const u16,
+        file: *const u16,
+        params: *const u16,
+        dir: *const u16,
+        show: i32,
+        inst: *mut c_void,
+        id_list: *mut c_void,
+        class: *const u16,
+        class_key: *mut c_void,
+        hot_key: u32,
+        monitor: *mut c_void,
+        process: *mut c_void,
+    }
     #[link(name = "shell32")]
     unsafe extern "system" {
-        fn ShellExecuteW(hwnd: *mut c_void, op: *const u16, file: *const u16, params: *const u16, dir: *const u16, show: i32) -> *mut c_void;
+        fn ShellExecuteExW(info: *mut ShellExecuteInfo) -> i32;
+    }
+    #[link(name = "ole32")]
+    unsafe extern "system" {
+        fn CoInitializeEx(reserved: *mut c_void, model: u32) -> i32;
+        fn CoUninitialize();
     }
     const SW_SHOWNORMAL: i32 = 1;
+    const COINIT_APARTMENTTHREADED: u32 = 0x2;
+    const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+    // Finish before returning: this runs on a background thread with no message loop.
+    const SEE_MASK_NOASYNC: u32 = 0x100;
+    // No error box from Windows: the caller says why.
+    const SEE_MASK_FLAG_NO_UI: u32 = 0x400;
     let (op, file) = (wide("open".as_ref()), wide(target));
-    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call; null
-    // window, parameters and directory are allowed.
-    let r = unsafe { ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) } as isize;
-    // ShellExecute reports success as a value above 32.
-    if r > 32 { Ok(()) } else { Err(std::io::Error::other(format!("Windows couldn't open it (code {r})"))) }
+    let mut info = ShellExecuteInfo {
+        size: std::mem::size_of::<ShellExecuteInfo>() as u32,
+        mask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI,
+        hwnd: std::ptr::null_mut(),
+        verb: op.as_ptr(),
+        file: file.as_ptr(),
+        params: std::ptr::null(),
+        dir: std::ptr::null(),
+        show: SW_SHOWNORMAL,
+        inst: std::ptr::null_mut(),
+        id_list: std::ptr::null_mut(),
+        class: std::ptr::null(),
+        class_key: std::ptr::null_mut(),
+        hot_key: 0,
+        monitor: std::ptr::null_mut(),
+        process: std::ptr::null_mut(),
+    };
+    // SAFETY: the struct is fully set and its strings are NUL-terminated UTF-16 that outlive
+    // the call. A browser is started through COM, which a background thread hasn't set up:
+    // without it the call can report success and open nothing. COM is closed again only when
+    // this call is what opened it (a result of 0 or more).
+    unsafe {
+        let com = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let opened = ShellExecuteExW(&mut info) != 0;
+        let failed = std::io::Error::last_os_error();
+        if com >= 0 {
+            CoUninitialize();
+        }
+        if opened { Ok(()) } else { Err(std::io::Error::other(format!("Windows couldn't open it ({failed})"))) }
+    }
 }
 
 /// How long to wait for an opener (xdg-open, open) to say it failed; one still running by
@@ -251,6 +305,17 @@ mod open_tests {
         let w = super::wide(url.as_ref());
         assert_eq!(String::from_utf16(&w[..w.len() - 1]).unwrap(), url);
         assert!(super::open_default(std::path::Path::new("-x")).is_err());
+    }
+
+    /// Opens a real browser tab, so it only runs when asked for: `cargo test opens_a_link -- --ignored`.
+    #[test]
+    #[ignore]
+    fn opens_a_link_from_a_background_thread() {
+        let opened = std::thread::spawn(|| super::open_default(std::path::Path::new("https://example.com/"))).join().unwrap();
+        assert!(opened.is_ok(), "{opened:?}");
+        let missing = std::thread::spawn(|| super::open_default(std::path::Path::new(r"C:
+o\suchile-seshi.txt"))).join().unwrap();
+        assert!(missing.is_err(), "a file that isn't there says so");
     }
 
     #[test]
