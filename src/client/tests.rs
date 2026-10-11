@@ -1131,6 +1131,25 @@ mod hydra_tests {
     }
 
     #[test]
+    fn a_session_keeps_its_row_unless_it_needs_you() {
+        let (_, mut app) = super::design_tests::render_with(160, 45);
+        let rows = |app: &mut App, codex: Status| {
+            app.snap.terms.get_mut(&1).unwrap().status = Status::Idle;
+            app.snap.terms.get_mut(&2).unwrap().status = codex;
+            app.hy_fresh();
+            let model = app.hy_model();
+            hydra::side_lines(app, &model, &app.theme).iter().filter_map(|l| hydra::line_term(&model, l)).take(2).collect::<Vec<_>>()
+        };
+        // claude (1) and codex (2), agents in one group.
+        assert_eq!(rows(&mut app, Status::Idle), [1, 2]);
+        assert_eq!(rows(&mut app, Status::Working), [1, 2], "starting work doesn't move it");
+        assert_eq!(rows(&mut app, Status::Done), [1, 2], "nor does finishing");
+        assert_eq!(rows(&mut app, Status::Blocked), [2, 1], "needing you does");
+        app.cfg.ui.attention_sort = false;
+        assert_eq!(rows(&mut app, Status::Blocked), [1, 2], "sorting off: nothing moves");
+    }
+
+    #[test]
     fn sessions_drag_within_their_group_and_click_to_open() {
         let (_, mut app) = super::design_tests::render_with(160, 45);
         for t in app.snap.terms.values_mut() {

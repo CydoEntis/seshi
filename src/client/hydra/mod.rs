@@ -406,6 +406,12 @@ pub(super) fn rank(s: Status) -> u8 {
     }
 }
 
+/// Sorts a session after the ones that need you. Nothing else about its state moves its row:
+/// a row that shifted each time its agent started or finished is hard to find again.
+pub(super) fn settled(s: Status) -> bool {
+    s != Status::Blocked
+}
+
 /// A split is one session: the pane it was split from keeps its row, the panes opened
 /// beside it don't get rows of their own. The row shows the most urgent of them, so an agent
 /// in a split that needs you still says so (and what it asks).
@@ -678,12 +684,12 @@ impl App {
             if sort {
                 for w in &mut p.wts {
                     let order = &self.hy.saved.session_order;
-                    w.sessions.sort_by_key(|s| (rank(s.status), order.iter().position(|t| *t == s.term).unwrap_or(usize::MAX), s.term));
+                    w.sessions.sort_by_key(|s| (settled(s.status), order.iter().position(|t| *t == s.term).unwrap_or(usize::MAX), s.term));
                 }
             }
             p.wts.sort_by_key(|w| {
-                let worst = w.sessions.iter().map(|s| rank(s.status)).min().unwrap_or(4);
-                (!w.main, if sort { worst } else { 0 }, w.name.clone())
+                let calm = w.sessions.iter().all(|s| settled(s.status));
+                (!w.main, sort && calm, w.name.clone())
             });
         }
         projs.sort_by_key(|p| order.iter().position(|k| *k == p.key).unwrap_or(usize::MAX));

@@ -89,7 +89,7 @@ pub struct Ui {
     /// Where plain `seshi` opens its first shell (and the one after you close everything).
     /// Empty: wherever you run seshi. `~` is your home folder.
     pub start_dir: String,
-    /// Sidebar sessions (and worktrees) sorted needs → done → working → idle.
+    /// Sidebar sessions (and worktrees) that need you go first; the rest keep their place.
     pub attention_sort: bool,
     /// Panes as cards with gaps between them ("floating"), or packed edge to edge ("tiled").
     pub panes: String,

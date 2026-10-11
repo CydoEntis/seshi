@@ -194,16 +194,17 @@ pub(in crate::client) fn side_lines(app: &App, model: &[Proj], t: &Theme) -> Vec
             out.push(Line::Gap);
             continue;
         }
-        // Just the sessions, most urgent first: needs you, done, working, idle (the repo
+        // Just the sessions: the ones that need you first, the rest where they were (the repo
         // folder's before the worktrees' when equal).
         let mut rows: Vec<(usize, usize)> = (0..p.wts.len()).flat_map(|wi| (0..p.wts[wi].sessions.len()).map(move |si| (wi, si))).collect();
-        // Your order (dragged) within the same urgency.
+        // Your order (dragged) otherwise.
         let order = &app.hy.saved.session_order;
         let at = |t: TermId| order.iter().position(|x| *x == t).unwrap_or(usize::MAX);
+        let sort = app.cfg.ui.attention_sort;
         rows.sort_by_key(|&(wi, si)| {
             let s = &p.wts[wi].sessions[si];
             let mine = at(s.term);
-            (rank(s.status), if mine == usize::MAX { !p.wts[wi].main } else { false }, mine, s.term)
+            (sort && settled(s.status), if mine == usize::MAX { !p.wts[wi].main } else { false }, mine, s.term)
         });
         let mut any = false;
         for (wi, si) in rows {

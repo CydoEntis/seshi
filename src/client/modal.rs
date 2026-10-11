@@ -97,7 +97,7 @@ pub const SETTINGS: &[Setting] = &[
     Setting { path: "shell", label: "Shell", kind: Kind::Program(SHELLS), cat: Cat::General, help: "The shell new sessions run. Empty: pwsh / powershell on Windows, $SHELL elsewhere." },
     Setting { path: "shell_integration", label: "PowerShell folder tracking", kind: Kind::Bool, cat: Cat::General, help: "Lets seshi see where PowerShell sessions cd to." },
     Setting { path: "auto_continue", label: "Continue after a limit", kind: Kind::Bool, cat: Cat::Sessions, help: "An agent stopped by its plan limit is told \"continue\" once the limit resets." },
-    Setting { path: "ui.attention_sort", label: "Sort sidebar by attention", kind: Kind::Bool, cat: Cat::Sessions, help: "Sessions that need you float to the top, then done, then working, then idle." },
+    Setting { path: "ui.attention_sort", label: "Sort sidebar by attention", kind: Kind::Bool, cat: Cat::Sessions, help: "Sessions that need you float to the top of their group. The rest keep their place." },
     Setting { path: "notify.desktop", label: "Desktop notifications", kind: Kind::Bool, cat: Cat::Sessions, help: "A notification when an agent you're not looking at needs you or finishes, even with seshi closed." },
     Setting { path: "notify.phone_topic", label: "Phone alerts (ntfy topic)", kind: Kind::Text, cat: Cat::Sessions, help: "Install the free ntfy app, subscribe to a hard-to-guess topic name, and put it here. Empty is off. seshi test-alert sends a test." },
     Setting { path: "notify.phone_after", label: "Phone: after waiting (s)", kind: Kind::Int { step: 30, min: 0, max: 3600 }, cat: Cat::Sessions, help: "Only once an agent has waited this long with nobody answering, so it stays quiet while you're at your desk." },
