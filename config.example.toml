@@ -1,11 +1,11 @@
-# hydra configuration
-# Location: %APPDATA%\hydra\config.toml on Windows, ~/.config/hydra/config.toml elsewhere
-# (override with HYDRA_CONFIG). Every key is optional; reload with <prefix> r.
+# seshi configuration
+# Location: %APPDATA%\seshi\config.toml on Windows, ~/.config/seshi/config.toml elsewhere
+# (override with SESHI_CONFIG). Every key is optional; reload with <prefix> r.
 
 prefix = "ctrl+space"
 
-# hydra | papercolor-dark | tango-dark | monokai | tokyo-night | catppuccin-mocha | catppuccin-latte | gruvbox | nord | dracula | mono
-theme = "hydra"
+# seshi-walnut | seshi-night | seshi-day | hydra | papercolor-dark | tango-dark | monokai | tokyo-night | catppuccin-mocha | catppuccin-latte | gruvbox | nord | dracula | mono
+theme = "seshi-walnut"
 
 # Shell for new panes. Default: pwsh / powershell on Windows, $SHELL elsewhere.
 # shell = "pwsh.exe"
@@ -116,7 +116,7 @@ A = "new-worktree:claude"   # worktree picker; whatever you open or create start
 # Agents are detected from the pane's process tree. Entries here merge over the
 # built-ins (claude, codex, gemini, opencode, cursor, copilot, amp, qwen, aider,
 # goose, crush, droid, pi, kiro) by name. Patterns are case-insensitive regexes
-# matched against the bottom of the screen; hooks (`hydra integrate claude`)
+# matched against the bottom of the screen; hooks (`seshi integrate claude`)
 # override them with exact lifecycle events.
 # [[agents]]
 # name = "my-agent"
@@ -159,5 +159,5 @@ A = "new-worktree:claude"   # worktree picker; whatever you open or create start
 # where = "worktree"
 
 [mcp]
-approve = "never"       # may agents (through `hydra mcp`) answer "yes" to prompts? never | safe | always
+approve = "never"       # may agents (through `seshi mcp`) answer "yes" to prompts? never | safe | always
 scope = "project"       # project | all

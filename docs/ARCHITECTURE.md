@@ -209,7 +209,7 @@ src/
   theme.rs       built-in themes and contrast audit
   daemon/        the server: mod.rs (loop), term.rs (PTY + vt100), scan.rs
                  (status), git.rs, persist.rs
-  client/        the UI: mod.rs (loop, input), hydra.rs (layout), design.rs
+  client/        the UI: mod.rs (loop, input), hydra/ (layout), design.rs
                  (drawing helpers), render.rs, menu.rs, views.rs, and one file
                  per feature (files, find, branch, recipes, pr, …)
   mcp.rs, project.rs, gitfs.rs, alert.rs, reveal.rs, update.rs, sync.rs
