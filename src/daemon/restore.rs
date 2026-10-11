@@ -2,6 +2,40 @@
 
 use super::*;
 
+/// What makes a pane the same session to you when its process is replaced (woken from
+/// sleep, moved to another folder): who it is and what you called it.
+struct Kept {
+    agent: Option<String>,
+    session: Option<String>,
+    cmd: Option<String>,
+    label: String,
+    name: String,
+    first_prompt: String,
+    model: String,
+    grants: Option<Vec<String>>,
+}
+
+impl Kept {
+    fn of(t: &Term) -> Kept {
+        Kept {
+            agent: t.agent.clone(),
+            session: t.session.clone(),
+            cmd: t.cmd.clone(),
+            label: t.label.clone(),
+            name: t.name.clone(),
+            first_prompt: t.first_prompt.clone(),
+            model: t.model.clone(),
+            grants: t.grants.clone(),
+        }
+    }
+
+    fn give(self, t: &mut Term) {
+        (t.agent, t.session, t.cmd) = (self.agent, self.session, self.cmd);
+        (t.label, t.name, t.first_prompt) = (self.label, self.name, self.first_prompt);
+        (t.model, t.grants) = (self.model, self.grants);
+    }
+}
+
 impl Daemon {
     pub(super) fn mass_exit(&self) -> bool {
         self.natural_exits.iter().filter(|t| t.elapsed() < MASS_EXIT_WINDOW).count() >= 2
@@ -214,7 +248,7 @@ impl Daemon {
         let t = self.terms.get(&old)?;
         let cmd = self.resume_cmd(t).or_else(|| t.cmd.clone());
         let (cwd, cols, rows) = (t.cwd.clone(), t.cols, t.rows);
-        let (agent, session, orig) = (t.agent.clone(), t.session.clone(), t.cmd.clone());
+        let kept = Kept::of(t);
         let new = match self.spawn(cmd.as_deref(), &cwd, cols, rows) {
             Ok(n) => n,
             Err(e) => {
@@ -223,9 +257,7 @@ impl Daemon {
             }
         };
         if let Some(n) = self.terms.get_mut(&new) {
-            n.agent = agent;
-            n.session = session;
-            n.cmd = orig;
+            kept.give(n);
         }
         for w in &mut self.workspaces {
             for tab in &mut w.tabs {
@@ -239,7 +271,10 @@ impl Daemon {
                 }
             }
         }
-        self.terms.remove(&old);
+        // Closing a terminal can block on Windows until its programs let go; never here.
+        if let Some(t) = self.terms.remove(&old) {
+            std::thread::spawn(move || drop(t));
+        }
         if let Some((ws, tab)) = self.locate(new) {
             if let Ok(w) = self.ws_mut(ws) {
                 w.active_tab = tab;
@@ -260,7 +295,7 @@ impl Daemon {
         }
         let cmd = self.resume_cmd(t);
         let (cols, rows) = (t.cols, t.rows);
-        let (agent, session, orig) = (t.agent.clone(), t.session.clone(), t.cmd.clone());
+        let kept = Kept::of(t);
         if let Some(t) = self.terms.get_mut(&old) {
             t.kill_tree();
         }
@@ -272,9 +307,7 @@ impl Daemon {
             }
         };
         if let Some(n) = self.terms.get_mut(&new) {
-            n.agent = agent;
-            n.session = session;
-            n.cmd = orig;
+            kept.give(n);
             let note = format!(
                 "You've been moved into the git worktree at {}. Your conversation continues here; make every further change in this folder. Carry on with the task.",
                 dest.display()

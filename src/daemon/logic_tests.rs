@@ -126,6 +126,23 @@ fn status_reports_apply_in_the_order_they_came() {
 }
 
 #[test]
+fn waking_a_sleeping_session_keeps_what_you_called_it() {
+    let (mut d, _rx) = daemon();
+    d.command(0, Command::NewWorkspace { cwd: Some(std::env::temp_dir()), name: None, cmd: None }).unwrap();
+    let old = d.workspaces[0].tabs[0].focus;
+    d.command(0, Command::RenamePane { term: old, name: "The Planner".into() }).unwrap();
+    let t = d.terms.get_mut(&old).unwrap();
+    (t.name, t.model, t.asleep) = ("roadmap".into(), "opus".into(), true);
+    t.kill_tree();
+    let new = d.wake(old).expect("it wakes");
+    assert!(new != old && !d.terms.contains_key(&old), "a new process in its place");
+    let t = &d.terms[&new];
+    assert_eq!((t.label.as_str(), t.name.as_str(), t.model.as_str()), ("The Planner", "roadmap", "opus"), "the same session to you");
+    assert_eq!(d.workspaces[0].tabs[0].focus, new, "in the same spot");
+    close(&mut d, &[new]);
+}
+
+#[test]
 fn detaching_and_closing_prune_tabs_and_workspaces() {
     let (mut d, _rx) = daemon();
     let dir = std::env::temp_dir();
