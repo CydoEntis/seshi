@@ -12,6 +12,8 @@ pub const GLIDE: Duration = Duration::from_millis(90);
 /// A toast's slide in, and the fade at the end of its time.
 pub const TOAST_IN: Duration = Duration::from_millis(120);
 pub const TOAST_FADE: Duration = Duration::from_millis(350);
+/// How long the pane you've just moved to stays lit up.
+pub const LAND: Duration = Duration::from_millis(450);
 
 /// A value moving from `from` to `to`, eased out (fast, then settling).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,6 +58,8 @@ pub struct Motion {
     /// Per tab: its panes last frame, and a new split's first-pane share as the new pane
     /// grows in.
     splits: HashMap<u64, (Vec<u64>, Option<Tween>)>,
+    /// The pane you're in, and the flash it got when you moved to it.
+    landed: Option<(u64, Option<Tween>)>,
 }
 
 impl Motion {
@@ -134,6 +138,27 @@ impl Motion {
         }
     }
 
+    /// How lit up the pane you're in (`pane`) is, 1 fading to 0: moving to another pane
+    /// flashes it, so the eye finds where the keys went.
+    pub fn land(&mut self, pane: u64, on: bool) -> f32 {
+        let now = Instant::now();
+        match &mut self.landed {
+            Some((was, flash)) if *was == pane => match flash {
+                Some(t) if !t.done(now) => t.at(now),
+                _ => {
+                    *flash = None;
+                    0.0
+                }
+            },
+            // The first pane seen is where you already were.
+            first => {
+                let flash = (first.is_some() && on).then(|| Tween::new(1.0, 0.0, LAND));
+                *first = Some((pane, flash));
+                if flash.is_some() { 1.0 } else { 0.0 }
+            }
+        }
+    }
+
     /// Something that changes the layout is moving (pane sizes wait for it to stop).
     pub fn layout_moving(&self) -> bool {
         let now = Instant::now();
@@ -143,7 +168,9 @@ impl Motion {
     /// Anything at all is moving (keep drawing frames).
     pub fn moving(&self) -> bool {
         let now = Instant::now();
-        self.layout_moving() || self.glides.values().any(|(.., t)| t.is_some_and(|t| !t.done(now)))
+        self.layout_moving()
+            || self.glides.values().any(|(.., t)| t.is_some_and(|t| !t.done(now)))
+            || self.landed.is_some_and(|(_, t)| t.is_some_and(|t| !t.done(now)))
     }
 }
 
@@ -169,6 +196,18 @@ mod tests {
         let mut m = Motion::default();
         m.side(true, false);
         assert_eq!(m.side(false, false), 0.0, "motion off: gone at once");
+    }
+
+    #[test]
+    fn the_pane_you_move_to_flashes() {
+        let mut m = Motion::default();
+        assert_eq!(m.land(1, true), 0.0, "where you already were: no flash");
+        assert_eq!(m.land(2, true), 1.0, "moved: lit up");
+        assert!(m.moving(), "and frames keep coming while it fades");
+        assert!(m.land(2, true) <= 1.0, "it only fades from there");
+        let mut m = Motion::default();
+        m.land(1, false);
+        assert_eq!(m.land(2, false), 0.0, "motion off: nothing flashes");
     }
 
     #[test]

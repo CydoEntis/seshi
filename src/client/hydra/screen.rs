@@ -857,6 +857,11 @@ pub(in crate::client) fn draw_session(app: &mut App, f: &mut Frame, r: Rect, ter
             _ => t.accent,
         }
     };
+    // Just moved here: the border and title flare and settle, so you see where you landed.
+    let on = app.motion_on();
+    let flash = if focused { app.motion.land(term as u64, on) } else { 0.0 };
+    let flare = if app.cfg.ui.focus_border == "bright" { t.accent } else { t.strong };
+    let border = if flash > 0.0 { blend(border, flare, flash) } else { border };
     let mut c = Card::new(t, &name);
     c.sub = &sub;
     c.state = info.agent.is_some().then_some(st).filter(|s| *s != Status::None);
@@ -865,7 +870,7 @@ pub(in crate::client) fn draw_session(app: &mut App, f: &mut Frame, r: Rect, ter
     c.foot_r = foot_r;
     if focused {
         c = c.lit(border);
-        c.title_fg = t.accent;
+        c.title_fg = if flash > 0.0 { blend(t.accent, flare, flash) } else { t.accent };
     }
     let buf = f.buffer_mut();
     let inside = card(app, buf, r, &c, t);
